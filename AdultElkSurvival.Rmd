@@ -1,0 +1,101 @@
+---
+title: "AdultFemaleSurvival"
+author: "HansMartin"
+date: "June 8, 2018"
+output: html_document
+---
+
+
+```{r include=FALSE, echo=FALSE,echo=FALSE, message=FALSE}
+#function to install and load required packages
+ipak <- function(pkg){
+  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if (length(new.pkg)) 
+    install.packages(new.pkg, dependencies = TRUE)
+  sapply(pkg, require, character.only = TRUE)
+}
+
+#load or install these packages:
+packages <- c("dplyr","tidyr","ggplot2","lubridate","fuzzyjoin")
+
+#run function to install packages
+ipak(packages)
+```
+
+```{r}
+mort<-read.csv("tMORTALITY_DATA29March2018.csv",stringsAsFactors = F)
+mort$MonthKilled<-month(as.POSIXlt(mort$Date.Killed, format="%m/%d/%Y"))
+mort$YearKilled<-year(as.POSIXlt(mort$Date.Killed, format="%m/%d/%Y"))
+mort$MonthFound<-month(as.POSIXlt(mort$Date.Found, format="%m/%d/%Y"))
+mort$YearFound<-year(as.POSIXlt(mort$Date.Found, format="%m/%d/%Y"))
+immob<-read.csv("Immobilization Data 3_29_2018.csv", stringsAsFactors = F)
+```
+
+```{r fig.width=6, fig.height=10 }
+mort %>% filter(Mortality.Cause %in% c("Hunter" , "Poaching" , "8" , "4") & Sex %in% c("Female","Unknown")) %>% 
+
+ggplot(., aes(MonthFound , ..count..))+
+  geom_histogram()+
+  facet_wrap(~YearFound, ncol=1)+
+  scale_x_continuous(breaks=seq(1:12),
+                  labels=month.name)
+
+```
+
+```{r}
+mort %>% filter(Mortality.Cause %in% c("Hunter" , "Poaching" , "8" , "4") & Sex %in% c("Female","Unknown")) %>% group_by(YearFound) %>% summarise(hunterkilled=n())
+  
+```
+
+```{r}
+mort %>% filter(Prey.Species=="Elk"& !mort$Name.Ear.Tag %in% c("NO" , "" , "unk" , "NONE","UNK","NA")& Event!="Dropped collar" ) %>% summarize(n())
+
+immob %>% filter(Species=="ELK" & Sex!="Male") %>% summarize(sum(Tooth.Sample))
+immob %>% filter(Species=="ELK" &Sex=="Male") %>% summarize(n())
+
+ids<-read.csv("C:/Users/Hans Martin/Documents/GitHub/AdultElkSurvivalEstimation/GPS_Mort_Immob_Key_June_2018.csv", stringsAsFactors = F)
+length(unique(ids$Animal.IDHans))
+```
+Data compilation using immobilization data, Mortality dataform, presence/absence data, and Telemetry forms:
+```{r}
+immob$UTCDate<-as.POSIXct(immob$Date,format="%m/%d/%Y", tz="America/Denver", usetz=T)
+
+MisMatchNames<-immob %>% filter(Species=="ELK") %>% mutate(EarTagID=paste(Tag.1.Color,Tag1.Number, sep="")) %>% filter(Animal.Name!=EarTagID) %>% select(Immob.Number,Species,Date, Tag1.Number,Tag.1.Color,Tag.1.Side,Tag.2.Color,Tag.2.Number,Tag.2.Side, Animal.Name,EarTagID)
+
+CorrectNames<-immob %>% filter(Species=="ELK") %>% mutate(EarTagID=paste(Tag.1.Color,Tag1.Number, sep="")) %>% filter(Animal.Name==EarTagID) %>% select(Immob.Number,Species,Date, Tag1.Number,Tag.1.Color,Tag.1.Side,Tag.2.Color,Tag.2.Number,Tag.2.Side, Animal.Name,EarTagID)
+
+write.csv(MisMatchNames,"ImmobilizationAnimalIDs.csv")
+ELKIDS<-read.csv("ImmobilizationAnimalIDHANSID.csv")
+nametest<-immob %>% filter(Species=="ELK") %>% mutate(EarTagID=paste(Tag.1.Color,Tag1.Number, sep="")) %>% left_join(ELKIDS, by="Immob.Number") 
+
+HMIDS<-read.csv("ElkIDEarTagAnimalIDKEY.csv",stringsAsFactors = T,strip.white = T)
+HMIDS2<-HMIDS %>% distinct(Animal.IDHans) %>% separate(Animal.IDHans,into = c("AliasID1","AliasID2"), sep="_", remove=F)
+
+HMIDS2 %>% filter(Animal.IDHans %in% HMIDS2$AliasID2)
+
+write.csv(ImmobilizationElkIDandAlias, "UniqueAnimalIDsForImmobilizationTable.csv")
+
+```
+
+Mortality Data
+```{r}
+mort$Name.Ear.Tag1<-trimws(mort$Name.Ear.Tag, which=c("both"))
+mort$Name.Ear.Tag1[mort$Name.Ear.Tag1==""|mort$Name.Ear.Tag1=="unk"|mort$Name.Ear.Tag1=="NONE"|mort$Name.Ear.Tag1=="N/A"|mort$Name.Ear.Tag1=="UNK"]<-NA
+
+mort<-mort%>% filter(Prey.Species=="Elk") %>% mutate(Name.Ear.Tag2=gsub(" ", "",Name.Ear.Tag1, fixed=T)) %>% mutate(Name.Ear.Tag2=gsub("\\(","_",Name.Ear.Tag2)) %>% mutate(Name.Ear.Tag2=gsub("\\)","",Name.Ear.Tag2)) %>% mutate(Name.Ear.Tag2=toupper(Name.Ear.Tag2))
+
+immobIDKey<-read.csv("UniqueAnimalIDsForImmobilizationTable.csv",stringsAsFactors = F)
+
+#mort %>% regex_left_join(immobIDKey, by=c("Al"))
+nrow(mort)
+mort<-mort[rowSums(is.na(mort)) != ncol(mort),]
+nrow(mort)
+
+#
+#s<-data.frame(string=c("BL234","BL243","GR352","352","YL2","YL23","YL234_YL2"),stringsAsFactors = F)
+#b<-data.frame(seed=c("BL234","BL243","GR352","352","YL2","YL23","YL234","BL9"),alias1=c(NA,NA,NA,NA,NA,NA,NA,"YL234_YL2"),id=c("1","2","3","4","5","6","7","8"),stringsAsFactors = F)
+#s %>% left_join(b,by=c("string" %in% c("seed","alias1"))) #%>% left_join(b,by=c("string"="alias1"))
+  #mutate(IDS=ifelse(string==b$seed,paste(b$id[b$seed==string]),paste(NA)))
+  
+  #left_join(b,by=c("string"="seed")) %>% left_join(b,by=c("string"="alias1"))
+```

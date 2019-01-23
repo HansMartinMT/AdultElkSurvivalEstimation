@@ -1,0 +1,201 @@
+---
+title: "ElkIDKeyFormation"
+author: "HansMartin"
+date: "June 13, 2018"
+output: html_document
+---
+Load Packages needed for this exercise
+```{r include=FALSE, echo=FALSE,echo=FALSE, message=FALSE}
+#function to install and load required packages
+ipak <- function(pkg){
+  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if (length(new.pkg)) 
+    install.packages(new.pkg, dependencies = TRUE)
+  sapply(pkg, require, character.only = TRUE)
+}
+
+#load or install these packages:
+packages <- c("dplyr","tidyr","ggplot2","lubridate","fuzzyjoin","purrr","readr","stringr")
+
+#run function to install packages
+ipak(packages)
+```
+
+Upload mortality and immobilization from the YHT Long-term Monitoring Acess Database
+```{r}
+#Mortality Data
+initialmort<-read.csv("tMORTALITY_DATA29March2018.csv",stringsAsFactors = F)
+#Immobilization Data
+immob<-read.csv("Immobilization Data 3_29_2018.csv", stringsAsFactors = F)
+```
+
+##Creating a unique ID for immobilizated  Elk:
+I used this code to identify if the eartag id numbers (color+ Eartag number) match the animal ID provided. If the eartag id numbers did not match the animal id, I checked to see what the difference between them was. If an animal was marked prior to the capture and retagged, I made the unique ID for that animal "new ear tag color and number_old ear tag color and number". I then also included aliases for that ID so that any animal that had two different ear tags throughout its life would have both its eartag ids found in the next two columns.
+```{r}
+#Determine total number of elk in database -should be 787
+nrow(immob %>% filter(Species=="ELK"))
+#Identify all entries where the eartag color+eartag number do not combine to equal the 'Animal.Name'.
+
+MisMatchNames<-immob %>% filter(Species=="ELK") %>% mutate(EarTagID=paste(Tag.1.Color,Tag1.Number, sep="")) %>% filter(Animal.Name!=EarTagID) %>% select(Immob.Number,Species,Date, Tag1.Number,Tag.1.Color,Tag.1.Side,Tag.2.Color,Tag.2.Number,Tag.2.Side, Animal.Name,EarTagID)
+
+#Save this information and determine what the correct animal name should be based on the nomenclature of eartag color+eartag ID.If an animal was marked prior to the capture and retagged, I made the unique ID for that animal "new ear tag color and number_old ear tag color and number".
+#write.csv(MisMatchNames,"ImmobilizationAnimalIDs.csv")
+
+#determine total number of mismatched names
+nrow(MisMatchNames)
+```
+
+```{r}
+#All animals which have 'correct' naming save below.
+CorrectNames<-immob %>% filter(Species=="ELK") %>% mutate(EarTagID=paste(Tag.1.Color,Tag1.Number, sep="")) %>% filter(Animal.Name==EarTagID) %>% select(Immob.Number,Species,Date, Tag1.Number,Tag.1.Color,Tag.1.Side,Tag.2.Color,Tag.2.Number,Tag.2.Side, Animal.Name,EarTagID)
+#determine total number of 'correct' names
+nrow(CorrectNames)
+#Do the correct and mismatched names sum to the total?
+sum(nrow(CorrectNames),nrow(MisMatchNames))
+
+#This will write any 
+#write.csv(MisMatchNames,"ImmobilizationAnimalIDs.csv")
+
+#This is the 'corrected' immobilization animal ids which are labeled: Animal.IDHans
+HMIDS<-read.csv("ElkIDEarTagAnimalIDKEY.csv",stringsAsFactors = T,strip.white = T)
+#Make sure this has the same number of rows as the original database:
+nrow(HMIDS)
+
+#This next code removes duplicate animal.IDHans from the dataset and keeps alias's
+HMIDS2<-HMIDS %>% distinct(Animal.IDHans) %>% separate(Animal.IDHans,into = c("AliasID1","AliasID2"), sep="_", remove=F)
+#This checks if any of the animals that were caught more than once had there 'animal.IDHans' correctly changed. It checks to see if the 'corrected' id occurs in the second alias.
+HMIDS2 %>% filter(Animal.IDHans %in% HMIDS2$AliasID2)
+#HMIDS2 %>% filter(Animal.IDHans %in% HMIDS2$AliasID1)
+ImmobilizationElkIDandAlias<-HMIDS2
+#This file contains the Animal.IDHans and the other names that this individual might be called in other databases.
+write.csv(ImmobilizationElkIDandAlias, "UniqueAnimalIDsForImmobilizationTable.csv")
+```
+##Mortality Data: Linking capture id's with mortality database IDs
+
+```{r}
+#Trim white space from the eartag ids
+initialmort$Name.Ear.Tag1<-trimws(initialmort$Name.Ear.Tag, which=c("both"))
+#If a mortality did not have an eartag id, then make all values "NA"
+initialmort$Name.Ear.Tag1[initialmort$Name.Ear.Tag1==""|initialmort$Name.Ear.Tag1=="unk"|initialmort$Name.Ear.Tag1=="NONE"|initialmort$Name.Ear.Tag1=="N/A"|initialmort$Name.Ear.Tag1=="UNK"]<-NA
+#create an elk mortality database removing whitespace from between characters and from the ends of characters. We also create a new eartagID (Name.Ear.Tag2)
+elkmort<-initialmort%>% filter(Prey.Species=="Elk") %>% mutate(Name.Ear.Tag2=gsub(" ", "",Name.Ear.Tag1, fixed=T)) %>% mutate(Name.Ear.Tag2=gsub("\\(","_",Name.Ear.Tag2)) %>% mutate(Name.Ear.Tag2=gsub("\\)","",Name.Ear.Tag2)) %>% mutate(Name.Ear.Tag2=toupper(Name.Ear.Tag2))
+#load the unique id's from the above step.
+immobIDKey<-read.csv("UniqueAnimalIDsForImmobilizationTable.csv",stringsAsFactors = F)
+mort<-elkmort
+```
+Next we need to see if the immobilization ID matches the mortality ids
+```{r}
+xx <- mort$Name.Ear.Tag2 #create a vector of the mortality ID's
+yy <- immobIDKey #Create a dataframe of the immoblization IDs
+
+tmp <- xx %>%
+  tibble::as.tibble() %>% #make a tibble from the mort data
+  filter(!is.na(xx)) %>% #filter out any NA values
+  mutate(eqHans = value %in% yy$Animal.IDHans, #determine if the mort Name.Ear.Tag2 occurs in the immobilization ID under Animal.IDHans
+         eqA1 = value %in% yy$AliasID1,#determine if the mort Name.Ear.Tag2 occurs in the immobilization ID under Alias1
+         eqA2 = value %in% yy$AliasID2) #determine if the mort Name.Ear.Tag2 occurs in the immobilization ID under Alias2
+
+#This creates 4 seperate tibbles based on if ...\
+#the mort Name.Ear.Tag2 occured in the immob database under the 'correct name'
+tmpHans <- tmp %>%
+  filter(eqHans == T)
+  #the mort Name.Ear.Tag2 occured in the immob database under alias 1
+tmpA1 <- tmp %>%
+  filter(eqHans == F,
+         eqA1 == T)
+#the mort Name.Ear.Tag2 occured in the immob database under alias 2
+tmpA2 <- tmp %>%
+  filter(eqHans == F,
+         eqA2 == T)
+#the mort Name.Ear.Tag2 did NOT occured in the immob database CHECK AND MAKE SURE THESE AREN"T ERRORS in DATA ENTRY!
+
+tmpNone <- tmp %>%
+  filter(eqHans == F,
+         eqA1 == F,
+         eqA2 == F
+         )
+#double check to make sure all entries were accounted for:
+sum(nrow(tmpHans),nrow(tmpA1),nrow(tmpA2),nrow(tmpNone))
+length(xx[!is.na(xx)])
+
+#Create a new file which contains both the 'corrected' Animal.IDHans label and the label that it is found under in the Mortality Database.
+tmpkeyHans<-left_join(select(tmpHans,value), select(immobIDKey,Animal.IDHans), by=c("value"="Animal.IDHans"))
+tmpkeyHans$Animal.IDHans<-tmpkeyHans$value#in this database the Animal.IDHans was correctly used in the mort database.
+tmpkeyalias1<-left_join(select(tmpA1,value), select(immobIDKey,Animal.IDHans,AliasID1), by=c("value"="AliasID1"))
+tmpkeyalias2<-left_join(select(tmpA2,value), select(immobIDKey,Animal.IDHans,AliasID2), by=c("value"="AliasID2"))
+#Bind the three tibbles together
+MortKey<-rbind(tmpkeyHans,tmpkeyalias1,tmpkeyalias2)
+#Specify column names:
+colnames(MortKey)<-c("MortAlias","Animal.IDHans")
+#join with the immobIDKEY to create a master key for the immobilization and mortality datasets.
+MortImmob_ElkIDKey<-immobIDKey %>% left_join(MortKey, by=c("Animal.IDHans"))
+#write.csv(MortImmob_ElkIDKey, "UniqueKeyJoiningMort_ImmobDatabases.csv")
+
+#Combine the mortality dataset with the common key linking the mortality and immobilization databases
+ElkMortalityData<-elkmort %>% filter(!is.na(Name.Ear.Tag2)) %>% left_join(MortImmob_ElkIDKey,by=c("Name.Ear.Tag2"="MortAlias"))
+#checking to see if animals 'died' more than one time...
+ElkMortalityData %>% group_by(Animal.IDHans) %>% filter(n()>1)
+```
+##Checking animal ids and numbers in the GPSCollar Database
+```{r}
+#Load GPS data from Jodi
+GPSDat<-read.csv("E:/YHTGPSCollarData/JBerg_5_21_2018YHT_GPS_Data/CLEAN_comb_GPS_data_13Apr2018.csv", stringsAsFactors = F)
+#View(unique(GPSDat$Elk.ID2))
+GPSDat$FIX.DATE.UTC<-as.POSIXct(GPSDat$FIX.DATE, usetz=F, TZ="UTC", format="%Y-%m-%d", TZ="UTC")
+GPSDat$Elk.ID2<-trimws(GPSDat$Elk.ID2, which=c("both"))
+```
+
+#Checking to make sure all of the ID's in the GPS database match either the animal.IDHans or one of the alias
+```{r}
+xx <- unique(GPSDat$Elk.ID2) #create a vector of the mortality ID's
+yy <- MortImmob_ElkIDKey #Create a dataframe of the immoblization IDs
+
+tmp <- xx %>%
+  tibble::as.tibble() %>% #make a tibble from the mort data
+  filter(!is.na(xx)) %>% #filter out any NA values
+  mutate(eqHans = value %in% yy$Animal.IDHans, #determine if the mort Name.Ear.Tag2 occurs in the immobilization ID under Animal.IDHans
+         eqA1 = value %in% yy$AliasID1,#determine if the mort Name.Ear.Tag2 occurs in the immobilization ID under Alias1
+         eqA2 = value %in% yy$AliasID2) #determine if the mort Name.Ear.Tag2 occurs in the immobilization ID under Alias2
+
+#This creates 4 seperate tibbles based on if ...\
+#the mort Name.Ear.Tag2 occured in the immob database under the 'correct name'
+tmpHans <- tmp %>%
+  filter(eqHans == T)
+  #the mort Name.Ear.Tag2 occured in the immob database under alias 1
+tmpA1 <- tmp %>%
+  filter(eqHans == F,
+         eqA1 == T)
+#the mort Name.Ear.Tag2 occured in the immob database under alias 2
+tmpA2 <- tmp %>%
+  filter(eqHans == F,
+         eqA2 == T)
+#the mort Name.Ear.Tag2 did NOT occured in the immob database CHECK AND MAKE SURE THESE AREN"T ERRORS in DATA ENTRY!
+
+tmpNone <- tmp %>%
+  filter(eqHans == F,
+         eqA1 == F,
+         eqA2 == F
+         )
+#double check to make sure all entries were accounted for:
+sum(nrow(tmpHans),nrow(tmpA1),nrow(tmpA2),nrow(tmpNone))
+length(xx[!is.na(xx)])
+```
+```{r}
+#Create a new file which contains both the 'corrected' Animal.IDHans label and the label that it is found under in the GPS Database.
+tmpkeyHans<-left_join(select(tmpHans,value), select(MortImmob_ElkIDKey,Animal.IDHans), by=c("value"="Animal.IDHans"))
+tmpkeyHans$Animal.IDHans<-tmpkeyHans$value#in this database the Animal.IDHans was correctly used in the mort database.
+tmpkeyalias1<-left_join(select(tmpA1,value), select(MortImmob_ElkIDKey,Animal.IDHans,AliasID1), by=c("value"="AliasID1"))
+tmpkeyalias2<-left_join(select(tmpA2,value), select(MortImmob_ElkIDKey,Animal.IDHans,AliasID2), by=c("value"="AliasID2"))
+#Bind the three tibbles together
+GPSKey<-rbind(tmpkeyHans,tmpkeyalias1,tmpkeyalias2)
+#Specify column names:
+colnames(GPSKey)<-c("GPSAlias","Animal.IDHans")
+#join with the immobIDKEY to create a master key for the immobilization and mortality datasets.
+GPSMortImmob_ElkIDKey<-MortImmob_ElkIDKey %>% left_join(GPSKey, by=c("Animal.IDHans"))
+#write.csv(MortImmob_ElkIDKey, "UniqueKeyJoiningMort_ImmobDatabases.csv")
+write.csv(GPSMortImmob_ElkIDKey,"GPS_Mort_Immob_Key_June_2018.csv")
+#Combine the mortality dataset with the common key linking the mortality and immobilization databases
+ElkGPSData<-GPSDat %>% left_join(GPSMortImmob_ElkIDKey,by=c("Elk.ID2"="GPSAlias"))
+#checking to see if animals 'died' more than one time...
+ElkGPSData %>% group_by(Animal.IDHans) %>% left_join(immob, by="")%>%  summarize(FirstGPSLoc=min(FIX.DATE.UTC), LastGPSLoc=max(FIX.DATE.UTC),Length=max(FIX.DATE.UTC)-min(FIX.DATE.UTC))#filter(n()>1)
+```
